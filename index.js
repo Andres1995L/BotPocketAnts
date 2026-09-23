@@ -1,6 +1,6 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, Events } = require('discord.js');
-const sqlite3 = require('sqlite3').verbose();
+const mongoose = require('mongoose'); // <-- Mongoose reemplaza a sqlite3
 const cron = require('node-cron');
 const axios = require('axios');
 const translate = require('google-translate-api-x');
@@ -40,82 +40,93 @@ const client = new Client({
     partials: [Partials.Message, Partials.Channel, Partials.Reaction]
 });
 
-const db = new sqlite3.Database('./colony.sqlite', (err) => {
-    if (err) console.error('Database opening error: ', err);
+// ==========================================
+// 🍃 CONEXIÓN A MONGODB Y MODELO DE DATOS
+// ==========================================
+mongoose.connect(process.env.MONGO_URI)
+    .then(() => console.log('🍃 Conectado con éxito a MongoDB Atlas'))
+    .catch(err => console.error('❌ Error de conexión a MongoDB:', err));
+
+const userSchema = new mongoose.Schema({
+    userId: { type: String, required: true, unique: true },
+    globalPoints: { type: Number, default: 0 },
+    weeklyPoints: { type: Number, default: 0 }
 });
 
-db.serialize(() => {
-    db.run("CREATE TABLE IF NOT EXISTS users (userId TEXT PRIMARY KEY, globalPoints INTEGER DEFAULT 0, weeklyPoints INTEGER DEFAULT 0)");
-});
+const User = mongoose.model('User', userSchema);
 
+// ==========================================
+// 📊 FUNCIÓN LEADERBOARD (Adaptada a Mongoose)
+// ==========================================
 async function generateLeaderboard(type, page, guildIcon) {
-    return new Promise((resolve, reject) => {
-        const limit = 10;
-        const offset = page * limit;
-        const orderBy = type === 'weekly' ? 'weeklyPoints' : 'globalPoints';
+    const limit = 10;
+    const offset = page * limit;
+    const orderBy = type === 'weekly' ? 'weeklyPoints' : 'globalPoints';
 
-        const countQuery = "SELECT COUNT(*) as count FROM users WHERE " + orderBy + " > 0";
-        
-        db.get(countQuery, (err, countRow) => {
-            if (err) return reject(err);
-            const totalCount = countRow ? countRow.count : 0;
-            const maxPage = Math.max(0, Math.ceil(totalCount / limit) - 1);
+    try {
+        const query = { [orderBy]: { $gt: 0 } };
+        const totalCount = await User.countDocuments(query);
+        const maxPage = Math.max(0, Math.ceil(totalCount / limit) - 1);
 
-            const sqlQuery = "SELECT userId, weeklyPoints, globalPoints FROM users WHERE " + orderBy + " > 0 ORDER BY " + orderBy + " DESC LIMIT ? OFFSET ?";
-            
-            db.all(sqlQuery, [limit, offset], (err, rows) => {
-                if (err) return reject(err);
+        const rows = await User.find(query)
+            .sort({ [orderBy]: -1 })
+            .skip(offset)
+            .limit(limit);
 
-                const embed = new EmbedBuilder()
-                    .setColor(type === 'weekly' ? '#00FF7F' : '#00FFFF')
-                    .setTitle('🏆 DONATION LEADERBOARD 🏆')
-                    .setDescription(`Showing **${type === 'weekly' ? 'Weekly' : 'Global Total'}** donations.\n*Weekly points reset every Sunday.*`)
-                    .setThumbnail(guildIcon)
-                    .setFooter({ text: `Page ${page + 1} of${maxPage + 1}` })
-                    .setTimestamp();
+        const embed = new EmbedBuilder()
+            .setColor(type === 'weekly' ? '#00FF7F' : '#00FFFF')
+            .setTitle('🏆 DONATION LEADERBOARD 🏆')
+            .setDescription(`Showing **${type === 'weekly' ? 'Weekly' : 'Global Total'}** donations.\n*Weekly points reset every Sunday.*`)
+            .setThumbnail(guildIcon)
+            .setFooter({ text: `Page ${page + 1} of${maxPage + 1}` })
+            .setTimestamp();
 
-                if (!rows || rows.length === 0) {
-                    embed.addFields({ name: '📊 Top Contributors', value: 'No donations recorded yet.' });
-                } else {
-                    let leaderboardText = '';
-                    rows.forEach((row, index) => {
-                        const globalRank = (page * limit) + index;
-                        const rankMedal = globalRank === 0 ? '🥇' : globalRank === 1 ? '🥈' : globalRank === 2 ? '🥉' : `**#${globalRank + 1}**`;
-                        
-                        const weeklyFormatted = row.weeklyPoints.toLocaleString('en-US');
-                        const globalFormatted = row.globalPoints.toLocaleString('en-US');
-                        const displayPoints = type === 'weekly' ? `${weeklyFormatted} Weekly` : `${globalFormatted} Global Total`;
-                        
-                        leaderboardText += `${rankMedal} <@${row.userId}> ➔ **${displayPoints}**\n`;
-                    });
-                    embed.addFields({ name: '📊 Top Contributors', value: leaderboardText });
-                }
-
-                const row = new ActionRowBuilder();
-                row.addComponents(
-                    new ButtonBuilder().setCustomId(`rank_${type}_${page - 1}`).setLabel('⬅️ Prev').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
-                    new ButtonBuilder().setCustomId(`rank_${type}_${page + 1}`).setLabel('Next ➡️').setStyle(ButtonStyle.Secondary).setDisabled(page >= maxPage)
-                );
-
-                const oppositeType = type === 'weekly' ? 'global' : 'weekly';
-                row.addComponents(
-                    new ButtonBuilder()
-                        .setCustomId(`rank_${oppositeType}_0`)
-                        .setLabel(type === 'weekly' ? '🌍 View Global Total' : '📅 View Weekly')
-                        .setStyle(type === 'weekly' ? ButtonStyle.Primary : ButtonStyle.Success)
-                );
-
-                resolve({ embeds: [embed], components: [row] });
+        if (!rows || rows.length === 0) {
+            embed.addFields({ name: '📊 Top Contributors', value: 'No donations recorded yet.' });
+        } else {
+            let leaderboardText = '';
+            rows.forEach((row, index) => {
+                const globalRank = (page * limit) + index;
+                const rankMedal = globalRank === 0 ? '🥇' : globalRank === 1 ? '🥈' : globalRank === 2 ? '🥉' : `**#${globalRank + 1}**`;
+                
+                const weeklyFormatted = row.weeklyPoints.toLocaleString('en-US');
+                const globalFormatted = row.globalPoints.toLocaleString('en-US');
+                const displayPoints = type === 'weekly' ? `${weeklyFormatted} Weekly` : `${globalFormatted} Global Total`;
+                
+                leaderboardText += `${rankMedal} <@${row.userId}> ➔ **${displayPoints}**\n`;
             });
-        });
-    });
+            embed.addFields({ name: '📊 Top Contributors', value: leaderboardText });
+        }
+
+        const row = new ActionRowBuilder();
+        row.addComponents(
+            new ButtonBuilder().setCustomId(`rank_${type}_${page - 1}`).setLabel('⬅️ Prev').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
+            new ButtonBuilder().setCustomId(`rank_${type}_${page + 1}`).setLabel('Next ➡️').setStyle(ButtonStyle.Secondary).setDisabled(page >= maxPage)
+        );
+
+        const oppositeType = type === 'weekly' ? 'global' : 'weekly';
+        row.addComponents(
+            new ButtonBuilder()
+                .setCustomId(`rank_${oppositeType}_0`)
+                .setLabel(type === 'weekly' ? '🌍 View Global Total' : '📅 View Weekly')
+                .setStyle(type === 'weekly' ? ButtonStyle.Primary : ButtonStyle.Success)
+        );
+
+        return { embeds: [embed], components: [row] };
+    } catch (error) {
+        console.error('Error in generateLeaderboard:', error);
+        throw error;
+    }
 }
 
-cron.schedule('0 19 * * 0', () => {
-    db.all("SELECT userId, weeklyPoints FROM users WHERE weeklyPoints > 0 ORDER BY weeklyPoints DESC LIMIT 10", async (err, rows) => {
-        if (err) return console.error('Error fetching weekly top for announcement:', err);
-
+// ==========================================
+// 📅 CRON JOB SEMANAL (Adaptado a Mongoose)
+// ==========================================
+cron.schedule('0 19 * * 0', async () => {
+    try {
+        const rows = await User.find({ weeklyPoints: { $gt: 0 } }).sort({ weeklyPoints: -1 }).limit(10);
         const channel = client.channels.cache.get(config.donationChannelId);
+        
         if (channel && rows.length > 0) {
             const announceEmbed = new EmbedBuilder()
                 .setColor('#FFD700')
@@ -132,8 +143,11 @@ cron.schedule('0 19 * * 0', () => {
             
             await channel.send({ embeds: [announceEmbed] });
         }
-        db.run("UPDATE users SET weeklyPoints = 0");
-    });
+        
+        await User.updateMany({}, { weeklyPoints: 0 });
+    } catch (err) {
+        console.error('Error fetching weekly top for announcement:', err);
+    }
 }, { scheduled: true, timezone: "America/Bogota" });
 
 client.once(Events.ClientReady, readyClient => {
@@ -159,7 +173,7 @@ client.on('guildMemberAdd', async member => {
             const welcomeEmbed = new EmbedBuilder()
                 .setColor('#00FF7F')
                 .setTitle('🐜 Welcome to Agonize!')
-                .setDescription(`Welcome <@${member.user.id}> to the **Pocket Ants** colony! 🍃\n\nWe hope you help grow the anthill and enjoy the community.`)
+                .setDescription(`Welcome <@${member.user.id}> 🍃\n\nWe hope you help grow the anthill and enjoy the community.`)
                 .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
                 .setImage('https://media.tenor.com/CBxyvlf0CMoAAAAM/welcome-anime.gif')
                 .setFooter({ text: `Member #${member.guild.memberCount}` })
@@ -178,9 +192,9 @@ client.on('guildMemberRemove', async member => {
             const goodbyeEmbed = new EmbedBuilder()
                 .setColor('#FF4500')
                 .setTitle('🍂 A member has left')
-                .setDescription(`**${member.user.username}** has left the colony.`)
+                .setDescription(`**${member.user.username}** has left and now...`)
                 .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
-                .setImage('https://media.discordapp.net/attachments/1551633327331479623/1552172215469084735/7K64xzw0R3y1aIs.gif?ex=6ab4a486&is=6ab35306&hm=480902a6e5a11f874d780d6f623b789b322eb611d1ed3d258688db7e2f5b6689&=') // Aquí cambié el .mp4 a .gif y lo metí al embed
+                .setImage('https://media.discordapp.net/attachments/1551633327331479623/1552172215469084735/7K64xzw0R3y1aIs.gif?ex=6ab4a486&is=6ab35306&hm=480902a6e5a11f874d780d6f623b789b322eb611d1ed3d258688db7e2f5b6689&=')
                 .setTimestamp();
             
             goodbyeChannel.send({ embeds: [goodbyeEmbed] }).catch(() => {});
@@ -408,34 +422,56 @@ client.on('messageCreate', async message => {
         return;
     }
 
+    // ==========================================
+    // 🧮 COMANDOS DE BASE DE DATOS (Adaptados a Mongoose)
+    // ==========================================
     if (command === '!add' && isStaff) {
         const targetUser = message.mentions.users.first();
         const amount = parseInt(args[2], 10);
         if (!targetUser || isNaN(amount)) return message.reply('⚠️ Syntax: `!add @user [amount]`');
-        db.get("SELECT * FROM users WHERE userId = ?", [targetUser.id], (err, row) => {
-            if (!row) db.run("INSERT INTO users (userId, globalPoints, weeklyPoints) VALUES (?, ?, ?)", [targetUser.id, amount, amount]);
-            else db.run("UPDATE users SET globalPoints = globalPoints + ?, weeklyPoints = weeklyPoints + ? WHERE userId = ?", [amount, amount, targetUser.id]);
+        
+        try {
+            await User.findOneAndUpdate(
+                { userId: targetUser.id },
+                { $inc: { globalPoints: amount, weeklyPoints: amount } },
+                { upsert: true, new: true }
+            );
             message.reply(`✅ Successfully added **${amount.toLocaleString('en-US')}** points to <@${targetUser.id}>.`);
-        });
+        } catch (err) {
+            console.error('Error in !add:', err);
+            message.reply('❌ Database error.');
+        }
     }
 
     if (command === '!remove' && isStaff) {
         const targetUser = message.mentions.users.first();
         const amount = parseInt(args[2], 10);
         if (!targetUser || isNaN(amount)) return message.reply('⚠️ Syntax: `!remove @user [amount]`');
-        db.get("SELECT * FROM users WHERE userId = ?", [targetUser.id], (err, row) => {
-            if (row) {
-                db.run("UPDATE users SET globalPoints = MAX(0, globalPoints - ?), weeklyPoints = MAX(0, weeklyPoints - ?) WHERE userId = ?", [amount, amount, targetUser.id]);
+        
+        try {
+            const user = await User.findOne({ userId: targetUser.id });
+            if (user) {
+                user.globalPoints = Math.max(0, user.globalPoints - amount);
+                user.weeklyPoints = Math.max(0, user.weeklyPoints - amount);
+                await user.save();
                 message.reply(`✅ Successfully removed **${amount.toLocaleString('en-US')}** points from <@${targetUser.id}>.`);
+            } else {
+                message.reply(`⚠️ No database record found for <@${targetUser.id}>.`);
             }
-        });
+        } catch (err) {
+            console.error('Error in !remove:', err);
+            message.reply('❌ Database error.');
+        }
     }
 
     if (command === '!resetweek' && isStaff) {
-        db.run("UPDATE users SET weeklyPoints = 0", (err) => {
-            if (err) return message.reply('❌ Database error.');
+        try {
+            await User.updateMany({}, { weeklyPoints: 0 });
             message.reply('🔄 **Weekly points have been successfully reset to 0 by Staff.**');
-        });
+        } catch (err) {
+            console.error('Error in !resetweek:', err);
+            message.reply('❌ Database error.');
+        }
     }
 
     if (command === '!send' && isStaff) {
@@ -568,6 +604,9 @@ client.on('interactionCreate', async interaction => {
         await interaction.update({ content: `🐜 **Donation selected:** **${selectedAmount.toLocaleString('en-US')}** resources.\n<@&${config.staffRoleID}>, please verify.`, components: [row] });
     }
 
+    // ==========================================
+    // ✅❌ BOTONES DE APROBAR / RECHAZAR (Adaptado a Mongoose)
+    // ==========================================
     if (interaction.isButton() && (interaction.customId.startsWith('approve_') || interaction.customId.startsWith('deny_'))) {
         if (!interaction.member.roles.cache.has(config.staffRoleID) && !interaction.member.permissions.has('Administrator')) {
             return interaction.reply({ content: '❌ You do not have Staff permissions to manage donations.', ephemeral: true });
@@ -585,14 +624,20 @@ client.on('interactionCreate', async interaction => {
             const claimerId = dataParts[1];
             const amount = parseInt(dataParts[2], 10);
 
-            db.get("SELECT * FROM users WHERE userId = ?", [claimerId], (err, row) => {
-                if (!row) db.run("INSERT INTO users (userId, globalPoints, weeklyPoints) VALUES (?, ?, ?)", [claimerId, amount, amount]);
-                else db.run("UPDATE users SET globalPoints = globalPoints + ?, weeklyPoints = weeklyPoints + ? WHERE userId = ?", [amount, amount, claimerId]);
+            try {
+                await User.findOneAndUpdate(
+                    { userId: claimerId },
+                    { $inc: { globalPoints: amount, weeklyPoints: amount } },
+                    { upsert: true }
+                );
 
                 const disabledBtn = new ButtonBuilder().setCustomId('approved_done').setLabel(`Approved by ${interaction.user.username}`).setStyle(ButtonStyle.Secondary).setDisabled(true);
                 const updatedRow = new ActionRowBuilder().addComponents(disabledBtn);
-                interaction.update({ content: `✅ **Donation approved!**\nAdded **${amount.toLocaleString('en-US')}** resources to <@${claimerId}> profile.`, components: [updatedRow] });
-            });
+                await interaction.update({ content: `✅ **Donation approved!**\nAdded **${amount.toLocaleString('en-US')}** resources to <@${claimerId}> profile.`, components: [updatedRow] });
+            } catch (error) {
+                console.error('Error approving donation:', error);
+                await interaction.followUp({ content: '❌ Database error saving the donation.', ephemeral: true });
+            }
         }
     }
 });
