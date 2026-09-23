@@ -641,5 +641,9 @@ client.on('interactionCreate', async interaction => {
         }
     }
 });
-
+const http = require('http');
+http.createServer((req, res) => {
+    res.write("Bot is alive!");
+    res.end();
+}).listen(process.env.PORT || 8080);
 client.login(process.env.TOKEN);
