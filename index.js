@@ -497,7 +497,7 @@ client.on('messageCreate', async message => {
     }
 
     if (command === '!say' && isStaff) {
-        const textMessage = args.slice(1).join(' ');
+        const textMessage = message.content.replace(/^!say\s+/i, '');
         if (!textMessage) return message.reply('⚠️ You forgot to write the message.');
         const sayEmbed = new EmbedBuilder().setColor('#00FFFF').setAuthor({ name: '🐜 Agonize Official Announcement', iconURL: client.user.displayAvatarURL() }).setDescription(textMessage).setTimestamp();
         try {
