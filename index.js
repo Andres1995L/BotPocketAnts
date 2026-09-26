@@ -434,7 +434,7 @@ client.on('messageCreate', async message => {
             await User.findOneAndUpdate(
                 { userId: targetUser.id },
                 { $inc: { globalPoints: amount, weeklyPoints: amount } },
-                { upsert: true, new: true }
+                { upsert: true, returnDocument: 'after' }
             );
             message.reply(`✅ Successfully added **${amount.toLocaleString('en-US')}** points to <@${targetUser.id}>.`);
         } catch (err) {
