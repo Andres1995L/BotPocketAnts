@@ -1,6 +1,6 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, Events } = require('discord.js');
-const mongoose = require('mongoose'); // <-- Mongoose reemplaza a sqlite3
+const mongoose = require('mongoose');
 const cron = require('node-cron');
 const axios = require('axios');
 const translate = require('google-translate-api-x');
@@ -478,22 +478,43 @@ client.on('messageCreate', async message => {
         const targetRole = message.mentions.roles.first();
         const targetUser = message.mentions.users.first();
         const textMessage = args.slice(2).join(' ');
+        
         if (!targetRole && !targetUser) return message.reply('⚠️ You must mention a user or a role.');
         if (!textMessage) return message.reply('⚠️ You forgot to write the message.');
+        
         try {
             if (targetRole) {
-                targetRole.members.forEach(member => { 
-                    if (!member.user.bot) member.send(`**Message from Agonize:**\n${textMessage}`).catch(() => {}); 
-                });
-                const replyMsg = await message.reply(`✅ DM sent to all members of **${targetRole.name}**.`);
+                const replyMsg = await message.reply(`⏳ Buscando a todos los miembros con el rol **${targetRole.name}**...`);
+                
+                const allMembers = await message.guild.members.fetch();
+                
+                const targetMembers = allMembers.filter(member => member.roles.cache.has(targetRole.id) && !member.user.bot);
+                
+                let count = 0;
+                
+                for (const [memberId, member] of targetMembers) {
+                    try {
+                        await member.send(`**Message from Agonize:**\n${textMessage}`);
+                        count++;
+                    } catch (err) {
+                        // Se ignora si los MDs están bloqueados
+                    }
+                }
+                
+                await replyMsg.edit(`✅ DM sent to **${count}** members of **${targetRole.name}** (including offline).`);
                 setTimeout(() => replyMsg.delete().catch(() => {}), 5000);
+                
             } else if (targetUser) {
                 await targetUser.send(`**Message from Agonize:**\n${textMessage}`);
                 const replyMsg = await message.reply(`✅ DM sent to **${targetUser.username}**.`);
                 setTimeout(() => replyMsg.delete().catch(() => {}), 5000);
             }
+            
             message.delete().catch(() => {});
-        } catch (error) { message.reply('❌ Error sending messages.'); }
+        } catch (error) { 
+            console.error(error);
+            message.reply('❌ Error sending messages.'); 
+        }
     }
 
     if (command === '!say' && isStaff) {
@@ -641,9 +662,11 @@ client.on('interactionCreate', async interaction => {
         }
     }
 });
+
 const http = require('http');
 http.createServer((req, res) => {
     res.write("Bot is alive!");
     res.end();
 }).listen(process.env.PORT || 8080);
+
 client.login(process.env.TOKEN);
