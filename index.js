@@ -158,7 +158,6 @@ client.once(Events.ClientReady, readyClient => {
 // 👋 BIENVENIDAS, DESPEDIDAS Y AUTOROL
 // ==========================================
 client.on('guildMemberAdd', async member => {
-    // 1. Asignar Auto-Rol
     if (config.autoRoleID) {
         const autoRole = member.guild.roles.cache.get(config.autoRoleID);
         if (autoRole) {
@@ -166,7 +165,6 @@ client.on('guildMemberAdd', async member => {
         }
     }
 
-    // 2. Enviar mensaje de Bienvenida (Con GIF de Tenor)
     if (config.welcomeChannelId) {
         const welcomeChannel = member.guild.channels.cache.get(config.welcomeChannelId);
         if (welcomeChannel) {
@@ -185,7 +183,6 @@ client.on('guildMemberAdd', async member => {
 });
 
 client.on('guildMemberRemove', async member => {
-    // Enviar mensaje de Despedida (Con GIF de Imgur integrado)
     if (config.goodbyeChannelId) {
         const goodbyeChannel = member.guild.channels.cache.get(config.goodbyeChannelId);
         if (goodbyeChannel) {
@@ -273,9 +270,9 @@ client.on('messageCreate', async message => {
 
             const textLines = parsedText.split('\n');
             for (let line of textLines) {
-                const userMatch = line.match(/([A-Za-z0-9_]{3,20})\s+(?:ha donado|donated)\s+(\d+)/i);
+                const userMatch = line.match(/(?:You|([A-Za-z0-9_]{3,20}))\s+(?:ha donado|donated)\s+(\d+)/i);
                 if (userMatch) {
-                    const username = userMatch[1];
+                    const username = userMatch[1] || null;
                     const amount = parseInt(userMatch[2], 10);
                     if (amount >= 100 && !donations.find(d => d.amount === amount)) {
                         donations.push({ username, amount });
@@ -423,20 +420,34 @@ client.on('messageCreate', async message => {
     }
 
     // ==========================================
-    // 🧮 COMANDOS DE BASE DE DATOS (Adaptados a Mongoose)
+    // 🧮 COMANDOS DE BASE DE DATOS (!add, !add glo, !remove, !resetweek)
     // ==========================================
     if (command === '!add' && isStaff) {
+        const isGlobalOnly = args[1] && args[1].toLowerCase() === 'glo';
         const targetUser = message.mentions.users.first();
-        const amount = parseInt(args[2], 10);
-        if (!targetUser || isNaN(amount)) return message.reply('⚠️ Syntax: `!add @user [amount]`');
+        const amountIndex = isGlobalOnly ? 3 : 2;
+        const amount = parseInt(args[amountIndex], 10);
+        
+        if (!targetUser || isNaN(amount)) {
+            return message.reply('⚠️ Syntax:\n`!add @user [amount]` (Weekly + Global)\n`!add glo @user [amount]` (Only Global)');
+        }
         
         try {
-            await User.findOneAndUpdate(
-                { userId: targetUser.id },
-                { $inc: { globalPoints: amount, weeklyPoints: amount } },
-                { upsert: true, returnDocument: 'after' }
-            );
-            message.reply(`✅ Successfully added **${amount.toLocaleString('en-US')}** points to <@${targetUser.id}>.`);
+            if (isGlobalOnly) {
+                await User.findOneAndUpdate(
+                    { userId: targetUser.id },
+                    { $inc: { globalPoints: amount } },
+                    { upsert: true }
+                );
+                message.reply(`🌍 ✅ Successfully added **${amount.toLocaleString('en-US')}** points ONLY to the **Global** leaderboard for <@${targetUser.id}>.`);
+            } else {
+                await User.findOneAndUpdate(
+                    { userId: targetUser.id },
+                    { $inc: { globalPoints: amount, weeklyPoints: amount } },
+                    { upsert: true }
+                );
+                message.reply(`✅ Successfully added **${amount.toLocaleString('en-US')}** points to <@${targetUser.id}>.`);
+            }
         } catch (err) {
             console.error('Error in !add:', err);
             message.reply('❌ Database error.');
@@ -485,19 +496,16 @@ client.on('messageCreate', async message => {
         try {
             if (targetRole) {
                 const replyMsg = await message.reply(`⏳ Buscando a todos los miembros con el rol **${targetRole.name}**...`);
-                
                 const allMembers = await message.guild.members.fetch();
-                
                 const targetMembers = allMembers.filter(member => member.roles.cache.has(targetRole.id) && !member.user.bot);
                 
                 let count = 0;
-                
                 for (const [memberId, member] of targetMembers) {
                     try {
                         await member.send(`**Message from Agonize:**\n${textMessage}`);
                         count++;
                     } catch (err) {
-                        // Se ignora si los MDs están bloqueados
+                        // Ignoramos a los que tienen MDs bloqueados
                     }
                 }
                 
@@ -539,9 +547,6 @@ client.on('messageCreate', async message => {
 });
 
 client.on('interactionCreate', async interaction => {
-    // ==========================================
-    // 🌐 RESPUESTA DEL MENÚ DE TRADUCCIÓN
-    // ==========================================
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('translate_msg_')) {
         await interaction.deferReply({ ephemeral: false }); 
 
@@ -561,7 +566,6 @@ client.on('interactionCreate', async interaction => {
                 .setFooter({ text: 'Agonize Translator' });
 
             await interaction.editReply({ embeds: [embed] });
-            
             await interaction.message.delete().catch(() => {});
 
         } catch (error) {
@@ -626,7 +630,7 @@ client.on('interactionCreate', async interaction => {
     }
 
     // ==========================================
-    // ✅❌ BOTONES DE APROBAR / RECHAZAR (Adaptado a Mongoose)
+    // ✅❌ BOTONES DE APROBAR / RECHAZAR
     // ==========================================
     if (interaction.isButton() && (interaction.customId.startsWith('approve_') || interaction.customId.startsWith('deny_'))) {
         if (!interaction.member.roles.cache.has(config.staffRoleID) && !interaction.member.permissions.has('Administrator')) {
