@@ -5,7 +5,7 @@ const cron = require('node-cron');
 const axios = require('axios');
 const translate = require('google-translate-api-x');
 
-console.log("✅ INICIANDO BOT DE DISCORD - CODE 9 (GIF IMGUR INTEGRADO)...");
+console.log("✅ INICIANDO BOT DE DISCORD - MEJORA DE PRECISIÓN OCR...");
 
 const config = {
     welcomeChannelId: '1551633326761312441', 
@@ -257,20 +257,28 @@ client.on('messageCreate', async message => {
             const formData = new URLSearchParams();
             formData.append('apikey', process.env.OCR_SPACE_API_KEY || 'helloworld');
             formData.append('url', attachment.url);
-            formData.append('OCREngine', '2');
-            formData.append('scale', 'true');
-            formData.append('isTable', 'true');
+            
+            // CONFIGURACIÓN MEJORADA PARA PRECISIÓN (ESPECIALMENTE RECORTES)
+            formData.append('OCREngine', '1'); // Motor 1 es mucho mejor para textos sueltos e imágenes de juegos
+            formData.append('scale', 'true');  // Escala imágenes pequeñas (como capturas recortadas)
+            // Se eliminó isTable para que no se confunda intentando buscar un formato de tabla.
 
             const ocrResponse = await axios.post('https://api.ocr.space/parse/image', formData, {
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
             });
 
-            const parsedText = ocrResponse.data?.ParsedResults?.[0]?.ParsedText || '';
-            const donations = [];
+            let parsedText = ocrResponse.data?.ParsedResults?.[0]?.ParsedText || '';
+            console.log(`[OCR LOG] Texto Crudo Detectado:`, parsedText);
+            
+            // LIMPIEZA DE CARACTERES: Quitamos corchetes '[ ]' que arruinan la lectura de la foto de Petro27
+            parsedText = parsedText.replace(/[\[\]]/g, ' ');
 
+            const donations = [];
             const textLines = parsedText.split('\n');
+
+            // Intento 1: Buscar la frase "X ha donado Y" o "You donated Y"
             for (let line of textLines) {
-                const userMatch = line.match(/(?:You|([A-Za-z0-9_]{3,20}))\s+(?:ha donado|donated)\s+(\d+)/i);
+                const userMatch = line.match(/(?:(?:You|([A-Za-z0-9_]{3,20}))\s+)?(?:ha donado|donated)\s+(\d+)/i);
                 if (userMatch) {
                     const username = userMatch[1] || null;
                     const amount = parseInt(userMatch[2], 10);
@@ -280,8 +288,11 @@ client.on('messageCreate', async message => {
                 }
             }
 
+            // Intento 2 (MODO RESPALDO AGRESIVO): Si no detectó la frase exacta, agarra TODOS los números válidos en toda la imagen
             if (donations.length === 0) {
-                const numbersFound = parsedText.match(/\d{3,8}/g);
+                // Eliminamos comas y puntos que a veces separan miles para que regex lea bien
+                const cleanNumbersText = parsedText.replace(/[,.]/g, ''); 
+                const numbersFound = cleanNumbersText.match(/\d{3,8}/g);
                 if (numbersFound) {
                     for (let numStr of numbersFound) {
                         const amount = parseInt(numStr, 10);
@@ -319,6 +330,7 @@ client.on('messageCreate', async message => {
                     components: [row]
                 });
             } else {
+                // Si detectó varios números, los pone en la lista para que elijas (el menú que tanto te gustaba)
                 const options = donations.map((d, index) => ({
                     label: `${d.username ? d.username + ' - ' : ''}${d.amount.toLocaleString('en-US')} resources`,
                     description: `Claim this amount`,
