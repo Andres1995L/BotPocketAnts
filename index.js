@@ -5,7 +5,7 @@ const cron = require('node-cron');
 const axios = require('axios');
 const translate = require('google-translate-api-x');
 
-console.log("✅ INICIANDO BOT DE DISCORD - MEJORA DE PRECISIÓN OCR...");
+console.log("✅ INICIANDO BOT DE DISCORD - OCR DOBLE MOTOR...");
 
 const config = {
     welcomeChannelId: '1551633326761312441', 
@@ -56,7 +56,7 @@ const userSchema = new mongoose.Schema({
 const User = mongoose.model('User', userSchema);
 
 // ==========================================
-// 📊 FUNCIÓN LEADERBOARD (Adaptada a Mongoose)
+// 📊 FUNCIÓN LEADERBOARD
 // ==========================================
 async function generateLeaderboard(type, page, guildIcon) {
     const limit = 10;
@@ -120,7 +120,7 @@ async function generateLeaderboard(type, page, guildIcon) {
 }
 
 // ==========================================
-// 📅 CRON JOB SEMANAL (Adaptado a Mongoose)
+// 📅 CRON JOB SEMANAL
 // ==========================================
 cron.schedule('0 19 * * 0', async () => {
     try {
@@ -242,6 +242,23 @@ client.on('messageReactionAdd', async (reaction, user) => {
 });
 
 // ==========================================
+// 🛠️ FUNCIÓN AUXILIAR OCR CON MULTI-MOTOR
+// ==========================================
+async function requestOCR(imageUrl, engine = '2') {
+    const formData = new URLSearchParams();
+    formData.append('apikey', process.env.OCR_SPACE_API_KEY || 'helloworld');
+    formData.append('url', imageUrl);
+    formData.append('OCREngine', engine);
+    formData.append('scale', 'true');
+    formData.append('detectOrientation', 'true');
+
+    const res = await axios.post('https://api.ocr.space/parse/image', formData, {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    });
+    return res.data?.ParsedResults?.[0]?.ParsedText || '';
+}
+
+// ==========================================
 // 🔍 OCR Y COMANDOS DE TEXTO
 // ==========================================
 client.on('messageCreate', async message => {
@@ -254,44 +271,41 @@ client.on('messageCreate', async message => {
         const scanningMsg = await message.reply('🔍 **Agonize bot is scanning the screenshot...**');
 
         try {
-            const formData = new URLSearchParams();
-            formData.append('apikey', process.env.OCR_SPACE_API_KEY || 'helloworld');
-            formData.append('url', attachment.url);
-            
-            // CONFIGURACIÓN MEJORADA PARA PRECISIÓN (ESPECIALMENTE RECORTES)
-            formData.append('OCREngine', '1'); // Motor 1 es mucho mejor para textos sueltos e imágenes de juegos
-            formData.append('scale', 'true');  // Escala imágenes pequeñas (como capturas recortadas)
-            // Se eliminó isTable para que no se confunda intentando buscar un formato de tabla.
+            // Intentamos primero con Motor 2 (Especialista en juegos y capturas con fondos)
+            let parsedText = await requestOCR(attachment.url, '2');
+            console.log(`[OCR LOG - Engine 2]:`, parsedText);
 
-            const ocrResponse = await axios.post('https://api.ocr.space/parse/image', formData, {
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-            });
+            // Si el Motor 2 no ve números razonables, intentamos con el Motor 1 de respaldo
+            if (!parsedText || !/\d{3,}/.test(parsedText)) {
+                console.log(`[OCR LOG] Engine 2 no encontró números claros. Probando Engine 1...`);
+                parsedText = await requestOCR(attachment.url, '1');
+                console.log(`[OCR LOG - Engine 1]:`, parsedText);
+            }
 
-            let parsedText = ocrResponse.data?.ParsedResults?.[0]?.ParsedText || '';
-            console.log(`[OCR LOG] Texto Crudo Detectado:`, parsedText);
-            
-            // LIMPIEZA DE CARACTERES: Quitamos corchetes '[ ]' que arruinan la lectura de la foto de Petro27
+            // Limpieza de caracteres que ensucian las capturas
             parsedText = parsedText.replace(/[\[\]]/g, ' ');
 
             const donations = [];
             const textLines = parsedText.split('\n');
 
-            // Intento 1: Buscar la frase "X ha donado Y" o "You donated Y"
+            // Intento 1: Patrón estricto de donación
+            const donationRegex = /(?:(?:You|([A-Za-z0-9_]{3,20}))\s+)?(?:ha\s+donado|donated|donade|donat)\s+(\d[\d\s.,]*\d|\d+)/i;
+
             for (let line of textLines) {
-                const userMatch = line.match(/(?:(?:You|([A-Za-z0-9_]{3,20}))\s+)?(?:ha donado|donated)\s+(\d+)/i);
-                if (userMatch) {
-                    const username = userMatch[1] || null;
-                    const amount = parseInt(userMatch[2], 10);
-                    if (amount >= 100 && !donations.find(d => d.amount === amount)) {
+                const match = line.match(donationRegex);
+                if (match) {
+                    const username = match[1] || null;
+                    const cleanNum = match[2].replace(/[\s.,]/g, '');
+                    const amount = parseInt(cleanNum, 10);
+                    if (!isNaN(amount) && amount >= 100 && !donations.find(d => d.amount === amount)) {
                         donations.push({ username, amount });
                     }
                 }
             }
 
-            // Intento 2 (MODO RESPALDO AGRESIVO): Si no detectó la frase exacta, agarra TODOS los números válidos en toda la imagen
+            // Intento 2: Si la frase completa falló por la tipografía, extraemos TODOS los números >= 100
             if (donations.length === 0) {
-                // Eliminamos comas y puntos que a veces separan miles para que regex lea bien
-                const cleanNumbersText = parsedText.replace(/[,.]/g, ''); 
+                const cleanNumbersText = parsedText.replace(/[,.]/g, '');
                 const numbersFound = cleanNumbersText.match(/\d{3,8}/g);
                 if (numbersFound) {
                     for (let numStr of numbersFound) {
@@ -330,7 +344,7 @@ client.on('messageCreate', async message => {
                     components: [row]
                 });
             } else {
-                // Si detectó varios números, los pone en la lista para que elijas (el menú que tanto te gustaba)
+                // Si detectó varios números, muestra el menú desplegable para elegir el correcto
                 const options = donations.map((d, index) => ({
                     label: `${d.username ? d.username + ' - ' : ''}${d.amount.toLocaleString('en-US')} resources`,
                     description: `Claim this amount`,
