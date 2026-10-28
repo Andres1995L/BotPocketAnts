@@ -5,7 +5,7 @@ const cron = require('node-cron');
 const axios = require('axios');
 const translate = require('google-translate-api-x');
 
-console.log("✅ INICIANDO BOT DE DISCORD - OCR DOBLE MOTOR...");
+console.log("✅ INICIANDO BOT DE DISCORD - VERSIÓN BLINDADA MAESTRA...");
 
 const config = {
     welcomeChannelId: '1551633326761312441', 
@@ -41,14 +41,18 @@ const client = new Client({
 });
 
 // ==========================================
-// 🍃 CONEXIÓN A MONGODB Y MODELO DE DATOS
+// 🍃 CONEXIÓN A MONGODB Y MODELO
 // ==========================================
 mongoose.connect(process.env.MONGO_URI)
     .then(() => console.log('🍃 Conectado con éxito a MongoDB Atlas'))
     .catch(err => console.error('❌ Error de conexión a MongoDB:', err));
 
 const userSchema = new mongoose.Schema({
-    userId: { type: String, required: true, unique: true },
+    userId: { type: String, default: null, sparse: true }, 
+    nick: { type: String, required: true, unique: true },   
+    rank: { type: String, default: 'Miembro' },
+    queenchamber: { type: Number, default: 1 },
+    trophies: { type: Number, default: 0 },
     globalPoints: { type: Number, default: 0 },
     weeklyPoints: { type: Number, default: 0 }
 });
@@ -56,7 +60,7 @@ const userSchema = new mongoose.Schema({
 const User = mongoose.model('User', userSchema);
 
 // ==========================================
-// 📊 FUNCIÓN LEADERBOARD
+// 📊 FUNCIÓN LEADERBOARD (CERO NULOS GARANTIZADO)
 // ==========================================
 async function generateLeaderboard(type, page, guildIcon) {
     const limit = 10;
@@ -68,7 +72,7 @@ async function generateLeaderboard(type, page, guildIcon) {
         const totalCount = await User.countDocuments(query);
         const maxPage = Math.max(0, Math.ceil(totalCount / limit) - 1);
 
-        const rows = await User.find(query)
+        const dbUsers = await User.find(query)
             .sort({ [orderBy]: -1 })
             .skip(offset)
             .limit(limit);
@@ -78,41 +82,46 @@ async function generateLeaderboard(type, page, guildIcon) {
             .setTitle('🏆 DONATION LEADERBOARD 🏆')
             .setDescription(`Showing **${type === 'weekly' ? 'Weekly' : 'Global Total'}** donations.\n*Weekly points reset every Sunday.*`)
             .setThumbnail(guildIcon)
-            .setFooter({ text: `Page ${page + 1} of${maxPage + 1}` })
+            .setFooter({ text: `Page ${page + 1} of ${maxPage + 1}` })
             .setTimestamp();
 
-        if (!rows || rows.length === 0) {
+        if (!dbUsers || dbUsers.length === 0) {
             embed.addFields({ name: '📊 Top Contributors', value: 'No donations recorded yet.' });
         } else {
             let leaderboardText = '';
-            rows.forEach((row, index) => {
+            dbUsers.forEach((userItem, index) => {
                 const globalRank = (page * limit) + index;
                 const rankMedal = globalRank === 0 ? '🥇' : globalRank === 1 ? '🥈' : globalRank === 2 ? '🥉' : `**#${globalRank + 1}**`;
                 
-                const weeklyFormatted = row.weeklyPoints.toLocaleString('en-US');
-                const globalFormatted = row.globalPoints.toLocaleString('en-US');
-                const displayPoints = type === 'weekly' ? `${weeklyFormatted} Weekly` : `${globalFormatted} Global Total`;
+                const pointsFormatted = (type === 'weekly' ? userItem.weeklyPoints : userItem.globalPoints).toLocaleString('en-US');
+                const displayPoints = type === 'weekly' ? `${pointsFormatted} Weekly` : `${pointsFormatted} Global Total`;
                 
-                leaderboardText += `${rankMedal} <@${row.userId}> ➔ **${displayPoints}**\n`;
+                // LÓGICA BLINDADA: Comprobación estricta para evitar cualquier formato nulo
+                let displayName = `**${userItem.nick}** (${userItem.rank || 'Miembro'})`;
+                if (userItem.userId && typeof userItem.userId === 'string' && userItem.userId.length > 5 && userItem.userId !== 'null' && userItem.userId !== 'undefined') {
+                    displayName = `<@${userItem.userId}> (\`${userItem.nick}\`) • ${userItem.rank || 'Miembro'}`;
+                }
+                
+                leaderboardText += `${rankMedal} ${displayName} ➔ **${displayPoints}**\n`;
             });
             embed.addFields({ name: '📊 Top Contributors', value: leaderboardText });
         }
 
-        const row = new ActionRowBuilder();
-        row.addComponents(
+        const actionRow = new ActionRowBuilder();
+        actionRow.addComponents(
             new ButtonBuilder().setCustomId(`rank_${type}_${page - 1}`).setLabel('⬅️ Prev').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
             new ButtonBuilder().setCustomId(`rank_${type}_${page + 1}`).setLabel('Next ➡️').setStyle(ButtonStyle.Secondary).setDisabled(page >= maxPage)
         );
 
         const oppositeType = type === 'weekly' ? 'global' : 'weekly';
-        row.addComponents(
+        actionRow.addComponents(
             new ButtonBuilder()
                 .setCustomId(`rank_${oppositeType}_0`)
                 .setLabel(type === 'weekly' ? '🌍 View Global Total' : '📅 View Weekly')
                 .setStyle(type === 'weekly' ? ButtonStyle.Primary : ButtonStyle.Success)
         );
 
-        return { embeds: [embed], components: [row] };
+        return { embeds: [embed], components: [actionRow] };
     } catch (error) {
         console.error('Error in generateLeaderboard:', error);
         throw error;
@@ -137,7 +146,11 @@ cron.schedule('0 19 * * 0', async () => {
             let topText = '';
             rows.forEach((row, index) => {
                 const rankMedal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `**#${index + 1}**`;
-                topText += `${rankMedal} <@${row.userId}> ➔ **${row.weeklyPoints.toLocaleString('en-US')}** resources\n`;
+                let userDisplay = `**${row.nick}**`;
+                if (row.userId && typeof row.userId === 'string' && row.userId.length > 5 && row.userId !== 'null') {
+                    userDisplay = `<@${row.userId}> (\`${row.nick}\`)`;
+                }
+                topText += `${rankMedal} ${userDisplay} ➔ **${row.weeklyPoints.toLocaleString('en-US')}** resources\n`;
             });
             announceEmbed.addFields({ name: '🏆 Top 10 Weekly Donators', value: topText });
             
@@ -230,7 +243,7 @@ client.on('messageReactionAdd', async (reaction, user) => {
             const result = await translate(textToTranslate, { to: targetLang });
             const embed = new EmbedBuilder()
                 .setColor('#3498DB')
-                .setAuthor({ name: `Translated to ${targetLang.toUpperCase()} for${user.username}`, iconURL: user.displayAvatarURL() })
+                .setAuthor({ name: `Translated to ${targetLang.toUpperCase()} for ${user.username}`, iconURL: user.displayAvatarURL() })
                 .setDescription(result.text)
                 .setFooter({ text: 'Agonize Translator' });
             
@@ -259,11 +272,114 @@ async function requestOCR(imageUrl, engine = '2') {
 }
 
 // ==========================================
-// 🔍 OCR Y COMANDOS DE TEXTO
+// 🔍 OCR, COMANDOS, SYNC Y !LINK
 // ==========================================
 client.on('messageCreate', async message => {
     if (message.author.bot) return;
 
+    const args = message.content.trim().split(/\s+/);
+    const command = args[0].toLowerCase();
+    const isStaff = message.member?.roles.cache.has(config.staffRoleID) || message.member?.permissions.has('Administrator');
+
+    // ==========================================
+    // 🔄 COMANDO !SYNC BLINDADO
+    // ==========================================
+    if (command === '!sync' && isStaff) {
+        const attachment = message.attachments.first();
+        if (!attachment) {
+            return message.channel.send('⚠️ **Por favor, adjunta el archivo del clan** junto con el comando `!sync`.');
+        }
+
+        const processingMsg = await message.channel.send('⏳ **Sincronizando los datos del clan...**');
+
+        try {
+            const response = await axios.get(attachment.url, {
+                responseType: 'arraybuffer',
+                validateStatus: null,
+                headers: { 'User-Agent': 'Mozilla/5.0' }
+            });
+
+            if (response.status !== 200) {
+                return processingMsg.edit(`❌ Error al descargar el archivo (Código HTTP: ${response.status}).`);
+            }
+
+            let fileText = Buffer.from(response.data).toString('utf-8');
+            fileText = fileText.replace(/^```[a-z]*\n?/i, '').replace(/```$/, '').trim();
+
+            let clanData;
+            try {
+                clanData = JSON.parse(fileText);
+            } catch (parseErr) {
+                return processingMsg.edit('❌ El archivo adjunto no tiene un formato JSON válido.');
+            }
+
+            if (!Array.isArray(clanData)) {
+                return processingMsg.edit('❌ El formato del clan no es una lista válida.');
+            }
+
+            for (const member of clanData) {
+                const globalVal = member.total && Array.isArray(member.total) ? member.total[0] : 0;
+                const weeklyVal = member.week && Array.isArray(member.week) ? member.week[0] : 0;
+
+                // Actualizamos los datos del juego manteniendo el userId si ya existía vinculado
+                await User.findOneAndUpdate(
+                    { nick: member.nick },
+                    {
+                        $set: {
+                            nick: member.nick,
+                            rank: member.rank || 'Miembro',
+                            queenchamber: member.queenchamber || 1,
+                            trophies: member.trophies || 0,
+                            globalPoints: globalVal,
+                            weeklyPoints: weeklyVal
+                        }
+                    },
+                    { upsert: true, new: true, setDefaultsOnInsert: true }
+                );
+            }
+
+            await processingMsg.edit(`✅ **¡Sincronización completada con éxito!** Se actualizaron los datos oficiales de **${clanData.length}** miembros.`);
+            message.delete().catch(() => {});
+        } catch (err) {
+            console.error('Error detallado en sync:', err);
+            processingMsg.edit('❌ Hubo un error en la base de datos al sincronizar. Revisa la consola.');
+        }
+        return;
+    }
+
+    // ==========================================
+    // 🔗 COMANDO !LINK
+    // ==========================================
+    if (command === '!link' && isStaff) {
+        const nickArg = args[1];
+        const targetUser = message.mentions.users.first();
+
+        if (!nickArg || !targetUser) {
+            return message.reply("⚠️ **Sintaxis incorrecta.** Usa: `!link [nick_en_juego] @usuario_discord`\n*(Ejemplo: `!link deivdeiv @Andres`)*");
+        }
+
+        try {
+            const updatedUser = await User.findOneAndUpdate(
+                { nick: new RegExp(`^${nickArg}$`, 'i') },
+                { userId: targetUser.id },
+                { new: true }
+            );
+
+            if (!updatedUser) {
+                return message.reply(`⚠️ No se encontró ningún miembro con el nick \`${nickArg}\` en la base de datos. Asegúrate de haber hecho \`!sync\` primero.`);
+            }
+
+            message.reply(`✅ **¡Vínculo exitoso!** El nick del juego **${updatedUser.nick}** ahora está conectado con <@${targetUser.id}>.`);
+        } catch (err) {
+            console.error('Error en !link:', err);
+            message.reply('❌ Ocurrió un error al intentar vincular el usuario.');
+        }
+        return;
+    }
+
+    // ==========================================
+    // 📸 PROCESAMIENTO DE CAPTURAS POR OCR (DONACIONES)
+    // ==========================================
     if (message.channel.id === config.donationChannelId && message.attachments.size > 0) {
         const attachment = message.attachments.first();
         if (!attachment.contentType || !attachment.contentType.startsWith('image/')) return;
@@ -271,24 +387,14 @@ client.on('messageCreate', async message => {
         const scanningMsg = await message.reply('🔍 **Agonize bot is scanning the screenshot...**');
 
         try {
-            // Intentamos primero con Motor 2 (Especialista en juegos y capturas con fondos)
             let parsedText = await requestOCR(attachment.url, '2');
-            console.log(`[OCR LOG - Engine 2]:`, parsedText);
-
-            // Si el Motor 2 no ve números razonables, intentamos con el Motor 1 de respaldo
             if (!parsedText || !/\d{3,}/.test(parsedText)) {
-                console.log(`[OCR LOG] Engine 2 no encontró números claros. Probando Engine 1...`);
                 parsedText = await requestOCR(attachment.url, '1');
-                console.log(`[OCR LOG - Engine 1]:`, parsedText);
             }
 
-            // Limpieza de caracteres que ensucian las capturas
             parsedText = parsedText.replace(/[\[\]]/g, ' ');
-
             const donations = [];
             const textLines = parsedText.split('\n');
-
-            // Intento 1: Patrón estricto de donación
             const donationRegex = /(?:(?:You|([A-Za-z0-9_]{3,20}))\s+)?(?:ha\s+donado|donated|donade|donat)\s+(\d[\d\s.,]*\d|\d+)/i;
 
             for (let line of textLines) {
@@ -303,7 +409,6 @@ client.on('messageCreate', async message => {
                 }
             }
 
-            // Intento 2: Si la frase completa falló por la tipografía, extraemos TODOS los números >= 100
             if (donations.length === 0) {
                 const cleanNumbersText = parsedText.replace(/[,.]/g, '');
                 const numbersFound = cleanNumbersText.match(/\d{3,8}/g);
@@ -344,7 +449,6 @@ client.on('messageCreate', async message => {
                     components: [row]
                 });
             } else {
-                // Si detectó varios números, muestra el menú desplegable para elegir el correcto
                 const options = donations.map((d, index) => ({
                     label: `${d.username ? d.username + ' - ' : ''}${d.amount.toLocaleString('en-US')} resources`,
                     description: `Claim this amount`,
@@ -371,16 +475,12 @@ client.on('messageCreate', async message => {
         return;
     }
 
-    const args = message.content.trim().split(/\s+/);
-    const command = args[0].toLowerCase();
-    const isStaff = message.member?.roles.cache.has(config.staffRoleID) || message.member?.permissions.has('Administrator');
-
     // ==========================================
     // 🌐 COMANDO DE TRADUCCIÓN (POR REPLY)
     // ==========================================
     if (command === '!translate') {
         if (!message.reference || !message.reference.messageId) {
-            return message.reply('⚠️ **You must reply to a message and type `!translate` to use this command.**\n*(Debes responder a un mensaje para usar este comando).*');
+            return message.reply('⚠️ **You must reply to a message and type `!translate` to use this command.**');
         }
 
         try {
@@ -445,9 +545,6 @@ client.on('messageCreate', async message => {
         return;
     }
 
-    // ==========================================
-    // 🧮 COMANDOS DE BASE DE DATOS (!add, !add glo, !remove, !resetweek)
-    // ==========================================
     if (command === '!add' && isStaff) {
         const isGlobalOnly = args[1] && args[1].toLowerCase() === 'glo';
         const targetUser = message.mentions.users.first();
@@ -530,12 +627,10 @@ client.on('messageCreate', async message => {
                     try {
                         await member.send(`**Message from Agonize:**\n${textMessage}`);
                         count++;
-                    } catch (err) {
-                        // Ignoramos a los que tienen MDs bloqueados
-                    }
+                    } catch (err) {}
                 }
                 
-                await replyMsg.edit(`✅ DM sent to **${count}** members of **${targetRole.name}** (including offline).`);
+                await replyMsg.edit(`✅ DM sent to **${count}** members of **${targetRole.name}**.`);
                 setTimeout(() => replyMsg.delete().catch(() => {}), 5000);
                 
             } else if (targetUser) {
@@ -572,6 +667,9 @@ client.on('messageCreate', async message => {
     }
 });
 
+// ==========================================
+// 🖱️ INTERACCIONES (BOTONES Y MENÚS)
+// ==========================================
 client.on('interactionCreate', async interaction => {
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('translate_msg_')) {
         await interaction.deferReply({ ephemeral: false }); 
@@ -596,7 +694,7 @@ client.on('interactionCreate', async interaction => {
 
         } catch (error) {
             console.error('Error traduciendo desde menú:', error);
-            await interaction.editReply({ content: '❌ **Error al intentar traducir el mensaje. (Error de red o mensaje borrado).**' });
+            await interaction.editReply({ content: '❌ **Error al intentar traducir el mensaje.**' });
         }
         return;
     }
@@ -630,15 +728,18 @@ client.on('interactionCreate', async interaction => {
         return interaction.editReply({ content: responseMsg });
     }
 
+    // BOTONES DE RANK (MANEJADOR ULTRA SEGURO CONTRA EL ERROR 40060)
     if (interaction.isButton() && interaction.customId.startsWith('rank_')) {
         const parts = interaction.customId.split('_');
         const type = parts[1];
         const page = parseInt(parts[2], 10);
         try {
             const leaderboardData = await generateLeaderboard(type, page, interaction.guild.iconURL({ dynamic: true }));
-            await interaction.update(leaderboardData);
+            if (!interaction.replied && !interaction.deferred) {
+                await interaction.update(leaderboardData);
+            }
         } catch (error) {
-            await interaction.reply({ content: '❌ Error loading the next page.', ephemeral: true });
+            console.error('Error al cambiar de página en rank:', error);
         }
         return;
     }
@@ -656,7 +757,7 @@ client.on('interactionCreate', async interaction => {
     }
 
     // ==========================================
-    // ✅❌ BOTONES DE APROBAR / RECHAZAR
+    // ✅❌ BOTONES DE APROBAR / RECHAZAR OCR
     // ==========================================
     if (interaction.isButton() && (interaction.customId.startsWith('approve_') || interaction.customId.startsWith('deny_'))) {
         if (!interaction.member.roles.cache.has(config.staffRoleID) && !interaction.member.permissions.has('Administrator')) {
@@ -676,15 +777,22 @@ client.on('interactionCreate', async interaction => {
             const amount = parseInt(dataParts[2], 10);
 
             try {
-                await User.findOneAndUpdate(
-                    { userId: claimerId },
-                    { $inc: { globalPoints: amount, weeklyPoints: amount } },
-                    { upsert: true }
-                );
+                const userRecord = await User.findOne({ userId: claimerId });
+                
+                if (!userRecord) {
+                    return interaction.reply({ 
+                        content: `⚠️ **No se pudo aprobar automáticamente:** Este usuario (<@${claimerId}>) no tiene un nick del juego vinculado.\nUsa \`!link [nick] <@${claimerId}>\` primero.`, 
+                        ephemeral: true 
+                    });
+                }
+
+                userRecord.globalPoints += amount;
+                userRecord.weeklyPoints += amount;
+                await userRecord.save();
 
                 const disabledBtn = new ButtonBuilder().setCustomId('approved_done').setLabel(`Approved by ${interaction.user.username}`).setStyle(ButtonStyle.Secondary).setDisabled(true);
                 const updatedRow = new ActionRowBuilder().addComponents(disabledBtn);
-                await interaction.update({ content: `✅ **Donation approved!**\nAdded **${amount.toLocaleString('en-US')}** resources to <@${claimerId}> profile.`, components: [updatedRow] });
+                await interaction.update({ content: `✅ **Donation approved!**\nAdded **${amount.toLocaleString('en-US')}** resources to **${userRecord.nick}** (<@${claimerId}>).`, components: [updatedRow] });
             } catch (error) {
                 console.error('Error approving donation:', error);
                 await interaction.followUp({ content: '❌ Database error saving the donation.', ephemeral: true });
