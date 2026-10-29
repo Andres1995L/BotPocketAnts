@@ -5,7 +5,7 @@ const cron = require('node-cron');
 const axios = require('axios');
 const translate = require('google-translate-api-x');
 
-console.log("✅ INICIANDO BOT DE DISCORD - OCR DE MÁXIMA PRECISIÓN RESTAURADO...");
+console.log("✅ INICIANDO BOT DE DISCORD - OCR ORIGINAL RESTAURADO Y PERFECTO...");
 
 const config = {
     welcomeChannelId: '1551633326761312441', 
@@ -254,7 +254,7 @@ client.on('messageReactionAdd', async (reaction, user) => {
 });
 
 // ==========================================
-// 🛠️ FUNCIÓN AUXILIAR OCR CON MULTI-MOTOR (ORIGINAL Y PRECISA)
+// 🛠️ FUNCIÓN AUXILIAR OCR CON MULTI-MOTOR (ORIGINAL)
 // ==========================================
 async function requestOCR(imageUrl, engine = '2') {
     const formData = new URLSearchParams();
@@ -376,7 +376,7 @@ client.on('messageCreate', async message => {
     }
 
     // ==========================================
-    // 📸 PROCESAMIENTO DE CAPTURAS POR OCR (FILTRO ORIGINAL DE ALTA PRECISIÓN)
+    // 📸 PROCESAMIENTO DE CAPTURAS POR OCR (MOTOR ORIGINAL RESTAURADO CON SELECT MENU)
     // ==========================================
     if (message.channel.id === config.donationChannelId && message.attachments.size > 0) {
         const attachment = message.attachments.first();
@@ -413,8 +413,7 @@ client.on('messageCreate', async message => {
                 if (numbersFound) {
                     for (let numStr of numbersFound) {
                         const amount = parseInt(numStr, 10);
-                        // Filtramos para evitar que agarre números menores a 500 (como días, niveles o cámaras de reina sueltos)
-                        if (amount >= 500 && !donations.find(d => d.amount === amount)) {
+                        if (amount >= 100 && !donations.find(d => d.amount === amount)) {
                             donations.push({ username: null, amount });
                         }
                     }
@@ -793,7 +792,7 @@ client.on('interactionCreate', async interaction => {
                 await interaction.update({ content: `✅ **Donation approved!**\nAdded **${amount.toLocaleString('en-US')}** resources to **${userRecord.nick}** (<@${claimerId}>).`, components: [updatedRow] });
             } catch (error) {
                 console.error('Error approving donation:', error);
-                await interaction.followUp({ content: '❌ Database error saving the donation.', ephemeral: true << 0 });
+                await interaction.followUp({ content: '❌ Database error saving the donation.', ephemeral: true });
             }
         }
     }
