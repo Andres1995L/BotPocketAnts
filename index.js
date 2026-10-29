@@ -5,7 +5,7 @@ const cron = require('node-cron');
 const axios = require('axios');
 const translate = require('google-translate-api-x');
 
-console.log("✅ INICIANDO BOT DE DISCORD - OCR DE ALTA PRECISIÓN RESTAURADO...");
+console.log("✅ INICIANDO BOT DE DISCORD - OCR DE MÁXIMA PRECISIÓN RESTAURADO...");
 
 const config = {
     welcomeChannelId: '1551633326761312441', 
@@ -254,30 +254,24 @@ client.on('messageReactionAdd', async (reaction, user) => {
 });
 
 // ==========================================
-// 🛠️ FUNCIÓN OCR DE ALTA PRECISIÓN (RESTAURADA)
+// 🛠️ FUNCIÓN AUXILIAR OCR CON MULTI-MOTOR (ORIGINAL Y PRECISA)
 // ==========================================
-async function requestOCR(imageUrl) {
+async function requestOCR(imageUrl, engine = '2') {
     const formData = new URLSearchParams();
     formData.append('apikey', process.env.OCR_SPACE_API_KEY || 'helloworld');
     formData.append('url', imageUrl);
-    formData.append('OCREngine', '2'); // Motor 2 optimizado para texto con estilo de juegos
-    formData.append('scale', 'true');    // Escalar la imagen mejora drásticamente los números pequeños
+    formData.append('OCREngine', engine);
+    formData.append('scale', 'true');
     formData.append('detectOrientation', 'true');
-    formData.append('isOverlayRequired', 'false');
 
-    try {
-        const res = await axios.post('https://api.ocr.space/parse/image', formData, {
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-        });
-        return res.data?.ParsedResults?.[0]?.ParsedText || '';
-    } catch (err) {
-        console.error('Error en OCR.space API:', err);
-        return '';
-    }
+    const res = await axios.post('https://api.ocr.space/parse/image', formData, {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    });
+    return res.data?.ParsedResults?.[0]?.ParsedText || '';
 }
 
 // ==========================================
-// 🔍 OCR INTELIGENTE, COMANDOS, SYNC Y !LINK
+// 🔍 OCR, COMANDOS, SYNC Y !LINK
 // ==========================================
 client.on('messageCreate', async message => {
     if (message.author.bot) return;
@@ -382,57 +376,99 @@ client.on('messageCreate', async message => {
     }
 
     // ==========================================
-    // 📸 PROCESAMIENTO DE CAPTURAS OCR DE ALTA PRECISIÓN (DONACIONES)
+    // 📸 PROCESAMIENTO DE CAPTURAS POR OCR (FILTRO ORIGINAL DE ALTA PRECISIÓN)
     // ==========================================
     if (message.channel.id === config.donationChannelId && message.attachments.size > 0) {
         const attachment = message.attachments.first();
         if (!attachment.contentType || !attachment.contentType.startsWith('image/')) return;
 
-        const scanningMsg = await message.reply('🔍 **Agonize bot is scanning the screenshot with high precision...**');
+        const scanningMsg = await message.reply('🔍 **Agonize bot is scanning the screenshot...**');
 
         try {
-            const parsedText = await requestOCR(attachment.url);
-            
-            // Limpieza avanzada enfocada en aislar montos grandes de recursos (ej: 12000, 18000, etc.)
-            const cleanText = parsedText.replace(/[^\d]/g, ' ');
-            const numbersFound = cleanText.match(/\d{3,8}/g) || [];
-            
+            let parsedText = await requestOCR(attachment.url, '2');
+            if (!parsedText || !/\d{3,}/.test(parsedText)) {
+                parsedText = await requestOCR(attachment.url, '1');
+            }
+
+            parsedText = parsedText.replace(/[\[\]]/g, ' ');
             const donations = [];
-            for (let numStr of numbersFound) {
-                const amount = parseInt(numStr, 10);
-                // Filtramos para asegurar que sean montos válidos de donación (ej: mayores a 500 y descartar días/niveles chicos)
-                if (amount >= 500 && !donations.includes(amount)) {
-                    donations.push(amount);
+            const textLines = parsedText.split('\n');
+            const donationRegex = /(?:(?:You|([A-Za-z0-9_]{3,20}))\s+)?(?:ha\s+donado|donated|donade|donat)\s+(\d[\d\s.,]*\d|\d+)/i;
+
+            for (let line of textLines) {
+                const match = line.match(donationRegex);
+                if (match) {
+                    const username = match[1] || null;
+                    const cleanNum = match[2].replace(/[\s.,]/g, '');
+                    const amount = parseInt(cleanNum, 10);
+                    if (!isNaN(amount) && amount >= 100 && !donations.find(d => d.amount === amount)) {
+                        donations.push({ username, amount });
+                    }
                 }
             }
 
             if (donations.length === 0) {
-                return scanningMsg.edit('❌ **Could not detect any valid donation amount.** Staff can use `!add @user amount` manually.');
+                const cleanNumbersText = parsedText.replace(/[,.]/g, '');
+                const numbersFound = cleanNumbersText.match(/\d{3,8}/g);
+                if (numbersFound) {
+                    for (let numStr of numbersFound) {
+                        const amount = parseInt(numStr, 10);
+                        // Filtramos para evitar que agarre números menores a 500 (como días, niveles o cámaras de reina sueltos)
+                        if (amount >= 500 && !donations.find(d => d.amount === amount)) {
+                            donations.push({ username: null, amount });
+                        }
+                    }
+                }
             }
 
-            // Tomamos el número más lógico o el primero relevante detectado con alta precisión
-            const donationAmount = donations[0];
-            const approveBtn = new ButtonBuilder()
-                .setCustomId(`approve_${message.author.id}_${donationAmount}`)
-                .setLabel(`Approve ${donationAmount.toLocaleString('en-US')}`)
-                .setStyle(ButtonStyle.Success)
-                .setEmoji('✅');
+            if (donations.length === 0) {
+                return scanningMsg.edit('❌ **Could not detect any valid amount.** Staff can use `!add @user amount` manually.');
+            }
 
-            const denyBtn = new ButtonBuilder()
-                .setCustomId(`deny_${message.author.id}`)
-                .setLabel('Deny')
-                .setStyle(ButtonStyle.Danger)
-                .setEmoji('❌');
+            if (donations.length === 1) {
+                const donation = donations[0];
+                const nameTag = donation.username ? `\`${donation.username}\`` : `<@${message.author.id}>`;
+                
+                const approveBtn = new ButtonBuilder()
+                    .setCustomId(`approve_${message.author.id}_${donation.amount}`)
+                    .setLabel(`Approve ${donation.amount.toLocaleString('en-US')}`)
+                    .setStyle(ButtonStyle.Success)
+                    .setEmoji('✅');
 
-            const row = new ActionRowBuilder().addComponents(approveBtn, denyBtn);
+                const denyBtn = new ButtonBuilder()
+                    .setCustomId(`deny_${message.author.id}`)
+                    .setLabel('Deny')
+                    .setStyle(ButtonStyle.Danger)
+                    .setEmoji('❌');
 
-            await scanningMsg.edit({
-                content: `🐜 **Donation detected:** <@${message.author.id}> donated **${donationAmount.toLocaleString('en-US')}** resources.\n<@&${config.staffRoleID}>, please verify.`,
-                components: [row]
-            });
+                const row = new ActionRowBuilder().addComponents(approveBtn, denyBtn);
+
+                await scanningMsg.edit({
+                    content: `🐜 **Donation detected:** ${nameTag} donated **${donation.amount.toLocaleString('en-US')}** resources.\n<@&${config.staffRoleID}>, please verify.`,
+                    components: [row]
+                });
+            } else {
+                const options = donations.map((d, index) => ({
+                    label: `${d.username ? d.username + ' - ' : ''}${d.amount.toLocaleString('en-US')} resources`,
+                    description: `Claim this amount`,
+                    value: `${d.amount}_${index}`
+                })).slice(0, 25);
+
+                const selectMenu = new StringSelectMenuBuilder()
+                    .setCustomId(`select_donation_${message.author.id}`)
+                    .setPlaceholder('Select your donation amount...')
+                    .addOptions(options);
+
+                const row = new ActionRowBuilder().addComponents(selectMenu);
+
+                await scanningMsg.edit({
+                    content: `⚠️ **Multiple numbers detected!**\n<@${message.author.id}>, please select your true donation from the menu below.`,
+                    components: [row]
+                });
+            }
 
         } catch (error) {
-            console.error('OCR Error:', error);
+            console.error('OCR.space Error:', error);
             scanningMsg.edit('❌ **Error processing the image.**');
         }
         return;
@@ -706,6 +742,18 @@ client.on('interactionCreate', async interaction => {
         return;
     }
 
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('select_donation_')) {
+        const claimerId = interaction.customId.split('_')[2];
+        if (interaction.user.id !== claimerId) return interaction.reply({ content: '❌ Only the user who uploaded the image can select their donation.', ephemeral: true });
+
+        const selectedAmount = parseInt(interaction.values[0].split('_')[0], 10);
+        const approveBtn = new ButtonBuilder().setCustomId(`approve_${claimerId}_${selectedAmount}`).setLabel(`Approve ${selectedAmount.toLocaleString('en-US')}`).setStyle(ButtonStyle.Success).setEmoji('✅');
+        const denyBtn = new ButtonBuilder().setCustomId(`deny_${claimerId}`).setLabel('Deny').setStyle(ButtonStyle.Danger).setEmoji('❌');
+        const row = new ActionRowBuilder().addComponents(approveBtn, denyBtn);
+
+        await interaction.update({ content: `🐜 **Donation selected:** **${selectedAmount.toLocaleString('en-US')}** resources.\n<@&${config.staffRoleID}>, please verify.`, components: [row] });
+    }
+
     // ==========================================
     // ✅❌ BOTONES DE APROBAR / RECHAZAR OCR
     // ==========================================
@@ -745,7 +793,7 @@ client.on('interactionCreate', async interaction => {
                 await interaction.update({ content: `✅ **Donation approved!**\nAdded **${amount.toLocaleString('en-US')}** resources to **${userRecord.nick}** (<@${claimerId}>).`, components: [updatedRow] });
             } catch (error) {
                 console.error('Error approving donation:', error);
-                await interaction.followUp({ content: '❌ Database error saving the donation.', ephemeral: true });
+                await interaction.followUp({ content: '❌ Database error saving the donation.', ephemeral: true << 0 });
             }
         }
     }
